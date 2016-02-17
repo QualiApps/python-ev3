@@ -4,6 +4,7 @@ import warnings
 import logging
 import re
 import atexit
+from stat import S_IRGRP, S_IWGRP
 
 logger = logging.getLogger(__name__)
 
@@ -180,28 +181,48 @@ def get_battery_percentage():
 
 
 class Ev3Dev(object):
-
     def __init__(self):
         self.sys_path = ""
+        self.fd_cache = {}
+
+    def __del__(self):
+        for fd in self.fd_cache.values():
+            fd.close()
+
+    def file_descriptor(self, name):
+        attr_file = os.path.join(self.sys_path, name)
+        try:
+            fd = self.fd_cache[attr_file]
+            fd.seek(0)
+        except KeyError as m:
+            fd = open(attr_file, self.get_mode(attr_file))
+            self.fd_cache[attr_file] = fd
+
+        return fd
+
+    @staticmethod
+    def get_mode(name):
+        mode = os.stat(name).st_mode
+        read = mode & S_IRGRP
+        write = mode & S_IWGRP
+
+        if read and write:
+            open_mode = "r+"
+        elif write:
+            open_mode = "w"
+        else:
+            open_mode = "r"
+
+        return open_mode
 
     def read_value(self, name):
-        attr_file = os.path.join(self.sys_path, name)
-        if os.path.isfile(attr_file):
-            with open(attr_file) as f:
-                value = f.read().strip()
-                return value
-        else:
-            return None
+        return self.file_descriptor(name).read().strip()
 
-    def write_value(self, name, value, flush = False):
-        attr_file = os.path.join(self.sys_path, name)
-        if os.path.isfile(attr_file):
-            with open(attr_file, 'w') as f:
-                f.write(str(value))
-                if flush:
-                    f.flush()
-        else:
-            return
+    def write_value(self, name, value, flush=False):
+        fd = self.file_descriptor(name)
+        fd.write(value)
+        if flush:
+            fd.flush()
 
 
 @create_ev3_property(
